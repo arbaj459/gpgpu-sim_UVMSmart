@@ -381,11 +381,12 @@ void gpgpu_t::gpu_insert_managed_allocation ( uint64_t cpuMemAddr, uint64_t gpuM
    a_i->gpu_mem_addr    = gpuMemAddr;
    a_i->allocation_size = size;
    a_i->copied          = false;
+   a_i->RWF=0;
 
    managedAllocations.insert(std::pair<uint64_t, struct allocation_info*>(cpuMemAddr, a_i));
 }
 
-void gpgpu_t::gpu_writeback( uint64_t gpuMemAddr)                                                                                                                                {
+void gpgpu_t::gpu_writeback( uint64_t gpuMemAddr){
   size_t page_size = get_global_memory()->get_page_size();
 
   mem_addr_t page_num = get_global_memory()->get_page_num(gpuMemAddr);

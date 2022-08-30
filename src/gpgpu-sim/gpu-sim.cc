@@ -1694,9 +1694,16 @@ void gpgpu_new_stats::print_time_and_access(FILE *fout) const
 
 void gpgpu_new_stats::print(FILE *fout) const
 {
+	
+
+   
+
+
    fprintf(fout, "========================================UVM statistics==============================\n");  
 
    fprintf(fout, "========================================TLB statistics(access)==============================\n");
+   
+   
    unsigned long long tot_tlb_hit = 0;
    unsigned long long tot_tlb_miss = 0;
    for(unsigned i = 0; i < m_config.num_cluster(); i++) {
@@ -1791,6 +1798,9 @@ void gpgpu_new_stats::print(FILE *fout) const
    }
 
    fprintf(fout, "Page_validate: %llu Page_evict_dirty: %llu Page_evict_not_dirty: %llu\n", tot_validate, page_evict_dirty, page_evict_not_dirty);
+  
+  
+  
   
    std::map<mem_addr_t, unsigned> page_thrash;
    for(std::map<mem_addr_t, std::vector<bool> >::const_iterator iter = page_thrashing.begin(); iter != page_thrashing.end(); iter++ ) {
@@ -2166,8 +2176,10 @@ bool gmmu_t::is_block_evictable(mem_addr_t addr, size_t size)
 void gmmu_t::page_eviction_procedure()
 {
     sort_valid_pages();
+    
 
     std::list<std::pair<mem_addr_t, size_t> > evicted_pages;
+    
 
     int eviction_start = (int) (valid_pages.size() * m_config.reserve_accessed_page_percent / 100);
 
@@ -2334,6 +2346,8 @@ void gmmu_t::page_eviction_procedure()
 
 void gmmu_t::valid_pages_erase(mem_addr_t page_num)
 {
+
+	
     mem_addr_t page_addr = m_gpu->get_global_memory()->get_mem_addr(page_num);
     for (std::list<eviction_t *>::iterator it = valid_pages.begin(); it != valid_pages.end(); it++) {
         if ((*it)->addr <= page_addr && page_addr < (*it)->addr + (*it)->size) {
@@ -2345,6 +2359,7 @@ void gmmu_t::valid_pages_erase(mem_addr_t page_num)
 
 void gmmu_t::valid_pages_clear()
 {
+    
     valid_pages.clear();
 }
 
@@ -2369,6 +2384,8 @@ void gmmu_t::refresh_valid_pages(mem_addr_t page_addr)
 }
 
 void gmmu_t::sort_valid_pages() {
+
+
     for (std::list<eviction_t *>::iterator vp_iter = valid_pages.begin(); vp_iter != valid_pages.end(); vp_iter++) {
         for (std::list<struct lp_tree_node*>::iterator lp_iter = large_page_info.begin(); lp_iter != large_page_info.end(); lp_iter++) {
             if ((*vp_iter)->addr == (*lp_iter)->addr) {
@@ -2671,11 +2688,17 @@ void gmmu_t::log_kernel_info(unsigned kernel_id, unsigned long long time, bool f
 
 void gmmu_t::update_memory_management_policy() 
 {
+
+
+
+
     std::map<std::string, ds_pattern> accessPatterns;
 
     int i = 1;
     std::map<std::pair<mem_addr_t, size_t>, std::string> dataStructures;
     std::map<std::string, std::list<mem_addr_t> > dsUniqueBlocks;
+    
+    
 
     // get the managed allocations 
     const std::map<uint64_t, struct allocation_info*>& managedAllocations = m_gpu->gpu_get_managed_allocations();
@@ -2904,7 +2927,37 @@ void gmmu_t::update_access_type(mem_addr_t addr, int type)
    }
 
    node->RW |= type;
+   
+ }
+/******************************************************************************************************************/
+void gmmu_t::update_read_global_type(mem_addr_t addr, int type) 
+{
+   
+   const std::map<uint64_t, struct allocation_info*>& managedAllocations = m_gpu->gpu_get_managed_allocations();
+
+    
+    for(std::map<uint64_t, struct allocation_info*>::const_iterator iter = managedAllocations.begin(); iter != managedAllocations.end(); iter++) 	{
+	if(iter->second->gpu_mem_addr==addr)
+	{	if(type==1)
+			iter->second->RWF=0;
+		else
+			iter->second->RWF=1;
+			
+		break;
+		
+	}
+	
+    }
+
+   
+   
+   /**************************************/
+
+
 }
+
+
+/************************************************************************************************************************/
 
 int gmmu_t::get_bb_access_counter(struct lp_tree_node *node, mem_addr_t addr)
 {  
@@ -3080,6 +3133,21 @@ bool gmmu_t::should_cause_page_migration(mem_addr_t addr, bool is_write)
 
 void gmmu_t::cycle()
 {
+
+/****************************************************************************************/
+const std::map<uint64_t, struct allocation_info*>& managedAllocations = m_gpu->gpu_get_managed_allocations();
+
+if(gpu_sim_cycle%100000==0){
+    FILE *f=fopen("read_only.txt","a");
+    for(std::map<uint64_t, struct allocation_info*>::const_iterator iter = managedAllocations.begin(); iter != managedAllocations.end(); iter++) 	{
+	
+	fprintf(f, "Page_Address %u Read/write: %i \n", iter->second->gpu_mem_addr,iter->second->RWF);
+	
+    }
+    fclose(f);
+}
+/*****************************************************************************************/
+
     int simt_cluster_id = 0;
 
     size_t num_read_stage_queue = 0;
@@ -4049,5 +4117,6 @@ gmmu_t * gpgpu_sim::getGmmu()
 {
    return m_gmmu;
 }
+
 
 

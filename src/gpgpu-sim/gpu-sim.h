@@ -692,6 +692,7 @@ public:
    void traverse_and_reset_round_trip(struct lp_tree_node *root);
    void reset_bb_round_trip();
    void update_access_type(mem_addr_t addr, int type);
+   void update_read_global_type(mem_addr_t addr, int type);
 
    bool should_cause_page_migration(mem_addr_t addr, bool is_write);
 private:

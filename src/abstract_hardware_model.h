@@ -519,6 +519,7 @@ struct allocation_info {
     uint64_t gpu_mem_addr;
     size_t   allocation_size;
     bool     copied;
+    bool RWF;
 };
 
 #define MAX_PREFETCH_SIZE (2*1024*1024)
