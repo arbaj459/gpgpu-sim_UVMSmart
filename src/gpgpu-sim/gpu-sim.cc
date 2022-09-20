@@ -84,6 +84,7 @@ bool g_interactive_debugger_enabled=false;
 
 bool sim_prof_enable = false;
 
+
 std::map<unsigned long long, std::list<event_stats*> > sim_prof;
 
 void print_sim_prof(FILE *fout, float freq)
@@ -1629,6 +1630,10 @@ gpgpu_new_stats::gpgpu_new_stats(const gpgpu_sim_config &config)
 
     page_evict_not_dirty = 0;
     page_evict_dirty = 0;
+    /****************/
+    read_only_count=0;
+    read_only_count_eviction=0;
+    /*******************/
 
     num_dma = 0;
     dma_page_transfer_read = 0;
@@ -1695,7 +1700,7 @@ void gpgpu_new_stats::print_time_and_access(FILE *fout) const
 void gpgpu_new_stats::print(FILE *fout) const
 {
 	
-
+	
    
 
 
@@ -1798,6 +1803,11 @@ void gpgpu_new_stats::print(FILE *fout) const
    }
 
    fprintf(fout, "Page_validate: %llu Page_evict_dirty: %llu Page_evict_not_dirty: %llu\n", tot_validate, page_evict_dirty, page_evict_not_dirty);
+   fprintf(fout, "Read_only_page_count: %llu \t read_only_count_eviction=%llu\n",read_only_count,read_only_count_eviction);
+   
+   //fprintf(fout, "Read_only_page_count: %llu\n",read_only_count);
+   
+   
   
   
   
@@ -2332,15 +2342,50 @@ void gmmu_t::page_eviction_procedure()
             valid_pages_erase(page_num);
         } else {
             mem_addr_t page_num = m_gpu->get_global_memory()->get_page_num(iter->first);
-
             for (int i = 0; i < (int)(iter->second / m_config.page_size); i++) {
-                p_t->page_list.push_back( page_num + i );
+                /************************************************************/
+
+               auto iiit = read_only_pages.find(page_num + i); 	
+               if(iiit!=read_only_pages.end())
+                {
+                    m_new_stats->read_only_count_eviction+=1;
+
+
+                    m_gpu->get_global_memory()->free_pages(1);
+                    if (i == 0) {
+                        struct lp_tree_node *root = m_gpu->getGmmu()->get_lp_node(m_gpu->get_global_memory()->get_mem_addr(page_num));
+                        inc_bb_round_trip(root);
+                    }
+
+                    m_new_stats->page_thrashing[page_num + i].push_back(false);
+
+                    if ( m_gpu->get_global_memory()->is_page_dirty(page_num + i) ) { 
+                        m_new_stats->page_evict_dirty++;
+                    } else {
+                        m_new_stats->page_evict_not_dirty++;
+                    }
+
+                    m_gpu->get_global_memory()->invalidate_page( page_num + i );
+                    m_gpu->get_global_memory()->clear_page_dirty( page_num + i );
+                    m_gpu->get_global_memory()->clear_page_access( page_num + i );
+
+
+                    tlb_flush( page_num + i );
+                    read_only_pages.erase(page_num + i);	
+                } else {
+                    p_t->page_list.push_back( page_num + i );
+                }
 
                 valid_pages_erase(page_num + i);
             }
         }
 
-        pcie_write_stage_queue.push_back( p_t );
+        if(!p_t->page_list.empty())
+        {
+            printf("\nwe are here1\n");
+            pcie_write_stage_queue.push_back( p_t );
+
+        }
     }
 }
 
@@ -2937,12 +2982,12 @@ void gmmu_t::update_read_global_type(mem_addr_t addr, int type)
 
     
     for(std::map<uint64_t, struct allocation_info*>::const_iterator iter = managedAllocations.begin(); iter != managedAllocations.end(); iter++) 	{
-	if(iter->second->gpu_mem_addr==addr)
-	{	if(type==1)
-			iter->second->RWF=0;
-		else
-			iter->second->RWF=1;
-			
+    	mem_addr_t lower,higher;
+    	lower=iter->second->gpu_mem_addr;
+    	higher=iter->second->gpu_mem_addr+iter->second->allocation_size;
+	if((lower<=addr && addr<=higher) && type==2)
+	{	
+		iter->second->RWF=1;
 		break;
 		
 	}
@@ -3134,18 +3179,45 @@ bool gmmu_t::should_cause_page_migration(mem_addr_t addr, bool is_write)
 void gmmu_t::cycle()
 {
 
+
 /****************************************************************************************/
 const std::map<uint64_t, struct allocation_info*>& managedAllocations = m_gpu->gpu_get_managed_allocations();
 
-if(gpu_sim_cycle%100000==0){
+if(gpu_sim_cycle%100000000==0){
     FILE *f=fopen("read_only.txt","a");
+    static int newcount=0;
+    printf("\nnewcout=%d  freepages=%d read_only_pages:%d valid_pages:%d read_stage_queue:%d write_stage_queue: %d\n",newcount,m_gpu->get_global_memory()->get_free_pages(), read_only_pages.size(), valid_pages.size(), pcie_read_stage_queue.size(), pcie_write_stage_queue.size());
+    newcount+=1;
+    
+    
     for(std::map<uint64_t, struct allocation_info*>::const_iterator iter = managedAllocations.begin(); iter != managedAllocations.end(); iter++) 	{
 	
-	fprintf(f, "Page_Address %u Read/write: %i \n", iter->second->gpu_mem_addr,iter->second->RWF);
+	fprintf(f, "Page_Address %u Read/write: %i \n", m_gpu->get_global_memory()->get_page_num(iter->second->gpu_mem_addr),iter->second->RWF);
 	
     }
     fclose(f);
+
+
+	FILE *f2=fopen("set_only.txt","w");
+	std::set<mem_addr_t>::iterator iter = read_only_pages.begin();
+
+
+        while (iter != read_only_pages.end()) {
+        fprintf(f2, "Page_Address %u \n",*iter);
+            iter++;
+        }
+fclose(f2);
+FILE *f3=fopen("write_stage_queue.txt","a");
+for ( std::list<pcie_latency_t*>::iterator iter = pcie_write_stage_queue.begin(); iter != pcie_write_stage_queue.end(); iter++) {
+
+		    fprintf(f3, "start_address %u  size: %u  ready cycle:%llu \n", (*iter)->start_addr,(*iter)->size,(*iter)->ready_cycle);
+                    
+                }
+
+fclose(f3);
+
 }
+
 /*****************************************************************************************/
 
     int simt_cluster_id = 0;
@@ -3157,8 +3229,10 @@ if(gpu_sim_cycle%100000==0){
     }
 
     size_t num_write_stage_queue = 0;
+    
 
     for ( std::list<pcie_latency_t*>::iterator iter = pcie_write_stage_queue.begin(); iter != pcie_write_stage_queue.end(); iter++) {
+    	
         num_write_stage_queue += (*iter)->page_list.size();
     }
 
@@ -3171,14 +3245,24 @@ if(gpu_sim_cycle%100000==0){
 	}
 
         page_eviction_procedure();
+        
     }
+    //printf("\nhere2\n");
     
     // check whether current transfer in the pcie write latency queue is finished
     if ( pcie_write_latency_queue != NULL && (gpu_sim_cycle+gpu_tot_sim_cycle) >= pcie_write_latency_queue->ready_cycle) {
+    printf("\nhere3\n");
                     
          for (std::list<mem_addr_t>::iterator iter = pcie_write_latency_queue->page_list.begin(); 
               iter != pcie_write_latency_queue->page_list.end(); iter++) {
-             m_gpu->gpu_writeback(m_gpu->get_global_memory()->get_mem_addr(*iter));
+         
+           	
+           	printf("\nhere4\n");
+           	m_gpu->gpu_writeback(m_gpu->get_global_memory()->get_mem_addr(*iter));
+           	
+           	
+           	
+        
          }
 
 	 if(sim_prof_enable) {
@@ -3199,9 +3283,44 @@ if(gpu_sim_cycle%100000==0){
     }    
 
     // schedule a write back transfer if there is a write back request in staging queue and a free lane
+    
     if ( !pcie_write_stage_queue.empty() && pcie_write_latency_queue == NULL) {
         pcie_write_latency_queue = pcie_write_stage_queue.front();
-        pcie_write_latency_queue->ready_cycle = get_ready_cycle( pcie_write_latency_queue->page_list.size() );
+        printf("\nhere5\n");
+        
+     //   int counter=0;
+        /******************************************************************************************/
+      /*  for (std::list<mem_addr_t>::iterator iterr = pcie_write_latency_queue->page_list.begin();
+              iterr != pcie_write_latency_queue->page_list.end(); iterr++) {
+              
+              auto iiit = read_only_pages.find(*iterr);
+           	if(iiit!=read_only_pages.end())
+           	{
+           	counter+=1;
+           	read_only_pages.erase(*iterr);
+           	
+              }
+              }*/
+        
+        /********************************************************************************************/
+        
+    /*	int ls;
+        ls=pcie_write_latency_queue->page_list.size();
+        
+        if(ls>counter)
+        {
+        //ls-=counter;
+        pcie_write_latency_queue->ready_cycle = get_ready_cycle(pcie_write_latency_queue->page_list.size()-counter);
+        }
+        
+        else
+        {
+        
+        pcie_write_latency_queue->ready_cycle = gpu_tot_sim_cycle + gpu_sim_cycle;
+        }
+        
+        */
+       pcie_write_latency_queue->ready_cycle = get_ready_cycle( pcie_write_latency_queue->page_list.size() );
 	 
 	for(unsigned long long write_period = gpu_tot_sim_cycle + gpu_sim_cycle; write_period != pcie_write_latency_queue->ready_cycle; write_period++ )
 		m_new_stats->pcie_write_utilization.push_back( std::make_pair(write_period, get_pcie_utilization(pcie_write_latency_queue->page_list.size())) );
@@ -3223,6 +3342,7 @@ if(gpu_sim_cycle%100000==0){
             m_gpu->get_global_memory()->free_pages(1);
         
 	    tlb_flush( *iter );
+	    printf("\nhere6\n");
         }
 
         struct lp_tree_node *root = m_gpu->getGmmu()->get_lp_node(m_gpu->get_global_memory()->get_mem_addr(pcie_write_latency_queue->page_list.front()));
@@ -3245,6 +3365,7 @@ if(gpu_sim_cycle%100000==0){
         pcie_write_stage_queue.pop_front();
 
         if (pcie_write_latency_queue->type == latency_type::INVALIDATE && m_config.invalidate_clean) {
+        	printf("\nhere7\n");
             pcie_write_latency_queue = NULL;
         }
     }    
@@ -3263,6 +3384,49 @@ if(gpu_sim_cycle%100000==0){
 
                 // add to the valid pages list
                 refresh_valid_pages(m_gpu->get_global_memory()->get_mem_addr(*iter));
+                
+                /*****************************************************************/
+                
+                mem_addr_t newadd=m_gpu->get_global_memory()->get_mem_addr(*iter);
+                const std::map<uint64_t, struct allocation_info*>& managedAllocations = m_gpu->gpu_get_managed_allocations();
+
+    
+    		for(std::map<uint64_t, struct allocation_info*>::const_iterator iterr = managedAllocations.begin(); iterr != managedAllocations.end(); iterr++) 	{
+    			mem_addr_t lower,higher;
+    			lower=iterr->second->gpu_mem_addr;
+    			higher=iterr->second->gpu_mem_addr+iterr->second->allocation_size;
+			if((lower<=newadd && newadd<=higher) && iterr->second->RWF==0 )
+			{	
+				//read_only_pages.insert(*iter);
+				
+				/**********************************************************************************/
+				mem_addr_t start_addr = get_eviction_base_addr(newadd);
+				int  size = get_eviction_granularity(newadd);
+				int ps=m_config.page_size;
+				for (mem_addr_t it=start_addr;it<start_addr+size;it+=ps){
+				
+        				auto iiit = read_only_pages.find(m_gpu->get_global_memory()->get_page_num(it));
+        					if(iiit==read_only_pages.end())
+        						m_new_stats->read_only_count+=1;
+        				
+	    					read_only_pages.insert(m_gpu->get_global_memory()->get_page_num(it));
+				
+    				}
+				/***********************************************************************************/
+				
+				break;
+		
+			}
+	
+    			}
+                
+                
+                
+                
+                
+                
+                
+                /*******************************************************************/
 
                 m_new_stats->page_thrashing[*iter].push_back(true);
 
@@ -3404,6 +3568,10 @@ if(gpu_sim_cycle%100000==0){
 
         mem_fetch* mf = page_table_walk_queue.front().mf;
 
+
+
+
+
         list<mem_addr_t> page_list = m_gpu->get_global_memory()->get_faulty_pages(mf->get_addr(), mf->get_access_size());
 
         simt_cluster_id = mf->get_sid() / m_config.num_core_per_cluster();
@@ -3469,6 +3637,9 @@ if(gpu_sim_cycle%100000==0){
 	         }
 	    }
         }
+
+
+
 
         page_table_walk_queue.pop_front();
     }

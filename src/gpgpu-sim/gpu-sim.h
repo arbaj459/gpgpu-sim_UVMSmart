@@ -281,6 +281,7 @@ extern bool g_interactive_debugger_enabled;
 
 class gpgpu_sim_config : public power_config, public gpgpu_functional_sim_config {
 public:
+    
     gpgpu_sim_config() { m_valid = false; }
     void reg_options(class OptionParser * opp);
     void init() 
@@ -358,8 +359,7 @@ private:
     // statistics collection
     int gpu_stat_sample_freq;
     int gpu_runtime_stat_flag;
-
-
+    
 
     unsigned long long liveness_message_freq; 
     unsigned long long page_table_walk_latency;
@@ -572,6 +572,10 @@ public:
     unsigned long long mf_page_fault_pending;
 
     unsigned long long page_evict_dirty;
+    /**********************************/
+    unsigned long long read_only_count;
+    unsigned long long read_only_count_eviction;
+    /********************************/
 
     unsigned long long page_evict_not_dirty;
 
@@ -740,12 +744,16 @@ private:
     // config file
     const gpgpu_sim_config &m_config;
     const struct shader_core_config *m_shader_config; 
-
+	
     // callback functions to invalidate the tlb in ldst unit
     std::list<std::function<void(mem_addr_t)> > callback_tlb_flush;
 
     // list of valid pages (valid = 1, accessed = 1/0, dirty = 1/0) ordered as LRU
     std::list<eviction_t *> valid_pages;
+    /**********************************************************************/
+    std::set<mem_addr_t> read_only_pages;
+    
+    /**********************************************************************/
 
     // page eviction policy
     enum class eviction_policy { LRU, TBN, SEQUENTIAL_LOCAL, RANDOM, LFU, LRU4K }; 
@@ -814,7 +822,7 @@ private:
     size_t total_allocation_size;
 
     bool over_sub;
-
+	
     class gpgpu_new_stats *m_new_stats;
 };
 
@@ -933,6 +941,7 @@ private:
    double dram_time;
    double l2_time;
    double gmmu_time;
+   
 
    // debug
    bool gpu_deadlock;
@@ -968,7 +977,10 @@ public:
    unsigned long long  gpu_tot_sim_insn;
    unsigned long long  gpu_sim_insn_last_update;
    unsigned gpu_sim_insn_last_update_sid;
-
+   /******************************/
+   
+   
+/************************************/
    FuncCache get_cache_config(std::string kernel_name);
    void set_cache_config(std::string kernel_name, FuncCache cacheConfig );
    bool has_special_cache_config(std::string kernel_name);
